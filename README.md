@@ -15,6 +15,7 @@ Based on Ryan Sweet's presentation "How to Nurse a Loonshot in 20m a Day" (Febru
 - `framework/` - Reference documentation for the Loonshot Framework methodology
 - `explorations/` - Individual idea explorations (one folder per idea)
 - `explorations/templates/` - Templates for weekly workflow documents
+- `journal/` - Daily session logs for continuity between sessions
 
 ## Getting Started
 
