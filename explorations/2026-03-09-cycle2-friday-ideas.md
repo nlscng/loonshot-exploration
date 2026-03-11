@@ -6,7 +6,7 @@
 
 ---
 
-## 10 Ideas
+## 11 Ideas
 
 | # | Idea | Source |
 |---|------|--------|
@@ -20,6 +20,7 @@
 | 8 | Daily standup summarizer agent | New |
 | 9 | Code review agent with memory | New |
 | 10 | Personal knowledge graph builder | New |
+| 11 | A2A (Agent-to-Agent protocol) project | New (added 2026-03-10) |
 
 ---
 
@@ -279,7 +280,73 @@ Three rounds of review, each from a different perspective:
 
 ---
 
-## Final Ranking
+## Idea #11: A2A (Agent-to-Agent Protocol) Project — Added 2026-03-10
+
+**What:** Build a multi-agent system using Google's A2A (Agent-to-Agent) protocol — an open protocol (now Linux Foundation) for agent-to-agent communication. JSON-RPC 2.0 over HTTP, Agent Cards for discovery, task lifecycle management. Distinct from MCP: MCP is vertical (model→tools), A2A is horizontal (agent↔agent). Python SDK at v0.3.25, pre-1.0, ~11 months old.
+
+**Scope:** Three possible shapes:
+- Shape A: "Netrunner Debate Club" — two agents argue card strategy (~330 LOC, 5-6 sessions)
+- Shape B: "Draft Advisor" — scout + evaluator pipeline via A2A (~410 LOC, 6-7 sessions)
+- Shape C: "Hiring Board" — dynamic discovery orchestrator with 3+ agents (~500 LOC, 7-8 sessions, tight)
+
+**Architecture (Shape B — most balanced):**
+```
+                    USER (CLI)
+                       │
+                       ▼
+              ORCHESTRATOR (A2A Client)
+              1. Fetch Agent Cards
+              2. Delegate to Scout
+              3. Pass results to Evaluator
+              4. Present synthesis
+               ╱              ╲
+          A2A/HTTP          A2A/HTTP
+             ╱                  ╲
+    ┌──────────────┐    ┌──────────────────┐
+    │ SCOUT AGENT  │    │ EVALUATOR AGENT  │
+    │ :8001        │    │ :8002            │
+    │ [Card DB]    │    │ [LLM + Meta KB]  │
+    └──────────────┘    └──────────────────┘
+```
+
+**Feasibility:** SDK works, samples exist, docs are decent. But pre-1.0 ecosystem — expect thin Stack Overflow coverage, SDK bugs, and async/multi-process friction. Protocol debugging will consume time.
+
+**Learning value:** Teaches *coordination between agents* — discovery, delegation, task lifecycle. Does NOT teach the core agent skills that failed in Cycle 1 (memory, planning, initiative). The protocol is about the pipes, not about what makes something an agent.
+
+**Fun:** Medium (6/10). The "wow" of two agents talking across processes is real but comes late (session 3-4) after significant boilerplate. More technical than experiential.
+
+**Career value:** High (7/10). A2A is positioned as the standard for agent interop. Google + IBM + Microsoft backing. But pre-1.0 means implementation-specific knowledge depreciates in ~12 months. The *concepts* transfer; the *SDK calls* won't.
+
+### Three-Round Analysis
+
+**Round 1 — Engineer/Architect:**
+- A2A is a legitimate protocol solving a real problem (agent collaboration as peers, not tool invocation)
+- 40-50% of time on protocol plumbing in sessions 1-3, dropping to 20% in sessions 4+
+- Cannot write a behavioral test as compelling as Meta-runner v2's — "the protocol adds ceremony, not capability"
+- Recommended as Cycle 3-4 project: "Build the conversationalist before building the telephone network"
+
+**Round 2 — Devil's Advocate:**
+- "This isn't an idea. It's Idea #3 wearing a different protocol's t-shirt." The word "something" is doing all the work in the sentence.
+- MCP was rejected as "technology choice in search of a problem." A2A has the same sin — both are protocols, both are infrastructure.
+- Key difference: A2A connects agents that *can* have initiative, MCP connects tools that *can't*. But you have ZERO working agents with initiative — "building a highway between two cities that don't exist."
+- Estimated 60-70% protocol plumbing. Probability of repeating Cycle 1 failure: 70-80%.
+- Kill shot: "You can't build a highway between two cities that don't exist yet."
+
+**Round 3 — Decision Advisor:**
+- Feasibility score disagreement (Round 1: 7, Round 2: 4) resolved to **5** — you can build it, you'll learn the wrong things.
+- Career value disagreement (Round 1: 7, Round 2: 6) resolved to **7** — value is real, timing is wrong.
+- Agent Learning confirmed at **3** — protocol work dominates, core agent skills untouched.
+- Behavioral test assessment: weak/partially disqualifying. Best attempt: "Agent B remembers prior critique and adjusts intensity" — but that tests the *agent*, not A2A. Strip out A2A, replace with function calls, test is identical.
+
+**Behavioral test:** Agent B receives a deck critique request, remembers what it criticized in the previous exchange, and adjusts critique intensity based on whether Agent A addressed the prior feedback — *without being told about the history.* **Verdict: Weak.** The interesting behaviors (memory, adaptation) exist independent of A2A. The protocol adds transport, not capability.
+
+| Scope Fit | Feasibility | Agent Learning | Career Value | Fun | Trap Risk (10=worst) |
+|:---------:|:-----------:|:--------------:|:------------:|:---:|:--------------------:|
+| 4 | 5 | 3 | 7 | 6 | 8 |
+
+---
+
+## Updated Final Ranking (11 Ideas)
 
 | Rank | Idea | Justification |
 |:----:|------|---------------|
@@ -289,10 +356,11 @@ Three rounds of review, each from a different perspective:
 | **4** | **#2 Terraform Tutor** | Good transferable pattern, wrong timing. Domain knowledge overhead kills agent learning at 20 min/day. Revisit after building one successful agent AND learning Terraform separately. |
 | **5** | **#4 Synthetic PII** | Practical but wrong venue. Agent surface area too thin. Do on company time. |
 | **6** | **#7 Meta-Agent Builder** | Right idea, wrong sequence. Build a real agent first, earn the right to go meta. |
-| **7** | **#3 MCP Server** | Infrastructure by definition. Protocol knowledge, not agent knowledge. |
-| **8** | **#10 Knowledge Graph** | Research project cosplaying as a side project. |
-| **9** | **#5 Tenant Scrubber** | JSON pipeline in an agent trenchcoat. |
-| **10** | **#6 IaC Reverse-Eng** | Eliminated. Wrong goal entirely. |
+| **7** | **#11 A2A Protocol Project** | Real technology, real career value, wrong cycle. Protocol plumbing ≠ agent behavior. Slots above MCP because multi-agent coordination is a harder, rarer skill — but still in the "real value, wrong timing" tier. **Strong Cycle 4 candidate.** |
+| **8** | **#3 MCP Server** | Infrastructure by definition. Protocol knowledge, not agent knowledge. |
+| **9** | **#10 Knowledge Graph** | Research project cosplaying as a side project. |
+| **10** | **#5 Tenant Scrubber** | JSON pipeline in an agent trenchcoat. |
+| **11** | **#6 IaC Reverse-Eng** | Eliminated. Wrong goal entirely. |
 
 ---
 
@@ -301,6 +369,7 @@ Three rounds of review, each from a different perspective:
 - **#1 → #9 (Sequential, not combined):** Build agent memory + planning in meta-runner (Cycle 2). Port those patterns to code review where they have higher career value and more data (Cycle 3). Memory system from Cycle 2 becomes reusable foundation.
 - **#3 as distribution for #1:** Expose meta-runner as MCP server so it can be invoked from your editor. But this is Cycle 4 — build the agent first, distribute later.
 - **#8 + #1:** Don't combine. Different domains, different data. Combining dilutes both.
+- **#11 as evolution of #1 (Cycle 4):** Build meta-runner v2 with real agency (Cycle 2). Build a second agent (Cycle 3). Connect them via A2A (Cycle 4). By then both agents have memory/planning/initiative, and A2A has something worth carrying. The behavioral test becomes: "Does the meta-runner know *when* to delegate and *what context* to send?"
 
 ---
 
