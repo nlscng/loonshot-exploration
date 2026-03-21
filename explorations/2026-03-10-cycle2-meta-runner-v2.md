@@ -121,7 +121,45 @@ If by end of session 3 the agent has not said something unprompted, **STOP and s
 
 ## Tuesday: Barriers
 
-*(To be completed)*
+Reviewed the v1 codebase (`quiz_agent.py`, `card_data.py`, test fixtures) and identified 8 concrete barriers across the 3 session deliverables.
+
+### Session 1: Memory (SM-2 + `memory.json`)
+
+| # | Barrier | Why It Matters | Mitigation |
+|---|---------|---------------|------------|
+| 1 | No persistence hook — CLI loop has no save/load lifecycle | Ctrl+C exits lose all memory data | Write after every answer (cheap for JSON); `atexit` handler as safety net |
+| 2 | `session_cards_seen` initialized but never used | Can't prevent within-session repeats; SM-2 tracks `(card_code, quiz_type)` pairs, not just card codes | Replace with SM-2's "already reviewed today" check |
+| 3 | **Card selection is random** (60% meta-biased `random.choice`) | SM-2 needs priority-based selection: overdue → weak → unseen → reinforcement. Rewires the core quiz loop. | New `_select_next_card()` method that consults memory before `_generate_question()` |
+
+**Barrier #3 is the critical path.** If card selection stays random, memory is write-only — tracked but never acted on.
+
+### Session 2: Planning (`plan_session()` + opening message)
+
+| # | Barrier | Why It Matters | Mitigation |
+|---|---------|---------------|------------|
+| 4 | No session boundary concept — `while True` with no start/end | Can't inject a session-opening plan before the first question | Add `_start_session()` called once before the loop; prints plan |
+| 5 | Cold start — first session has no history to plan from | `plan_session()` returns empty when memory.json doesn't exist | Default to "meta staples intro" plan; explain to user what future plans will look like |
+
+### Session 3: Initiative (commentary + course correction)
+
+| # | Barrier | Why It Matters | Mitigation |
+|---|---------|---------------|------------|
+| 6 | `handle_message()` returns a single string | Initiative means extra commentary appended to quiz results | Response builder: accumulate parts, join at return |
+| 7 | No rolling performance tracking | Course correction needs streaks and per-topic accuracy, not just cumulative totals | Add `_session_tracker` with recent-N window (last 5-10 answers) |
+
+### Cross-cutting
+
+| # | Barrier | Why It Matters | Mitigation |
+|---|---------|---------------|------------|
+| 8 | Test fixtures bypass `__init__` via `patch.object` | New init behavior (load memory, set up SM-2) silently skipped in tests | Update fixtures to either call real init with test memory file, or explicitly set up SM-2 state |
+
+### Critical Path
+
+```
+Barrier #3 (card selection) → Barrier #1 (persistence) → Barrier #4 (session boundary) → Barrier #6 (response builder)
+```
+
+Everything else is additive. Solve #3 and sessions 2-3 are extensions of the same priority queue.
 
 ---
 
@@ -148,3 +186,7 @@ If by end of session 3 the agent has not said something unprompted, **STOP and s
 ### Week 1
 
 **2026-03-10 (Tuesday):** Completed Monday framing phase. Researched SM-2, agent memory patterns, session planning, and initiative in request-response frameworks. Key finding: all three missing agent behaviors (memory, planning, initiative) can be added with zero new infrastructure — one JSON file, three pure functions, piggybacked response content. Created execution plan for sessions 1-3.
+
+### Week 2
+
+**2026-03-21 (Saturday):** Completed Tuesday barriers phase. Reviewed v1 codebase in detail and identified 8 barriers across 3 session deliverables. Critical path is Barrier #3: card selection rewiring from random to SM-2-driven priority picking. Also evaluated MCP server for Cycle 2 — deferred (no behavioral test, infrastructure trap). See barriers tables above for mitigations.
