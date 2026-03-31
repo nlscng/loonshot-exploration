@@ -1,7 +1,7 @@
 # Design: Meta-Runner v2 — Conversational Coaching Agent
 
 **Date:** 2026-03-30
-**Status:** Draft
+**Status:** Reviewed (4-round critique applied)
 **Context:** Pivoting from quiz-only agent to conversational coaching agent
 
 ---
@@ -127,6 +127,7 @@ Agent: Here's "Glacial Precision" by NetDecker (1st at Melbourne SC):
    - Reviews for community perspective
    - Concept catalog for structured knowledge
    - Memory for personalisation
+   - **Tournament results from ABR** for performance context
 
 3. **Conversation state** — Track:
    - Current topic (concept being explored)
@@ -139,6 +140,51 @@ Agent: Here's "Glacial Precision" by NetDecker (1st at Melbourne SC):
    - Related topics to explore
    - Questions to check understanding (optional quiz moments)
    - "Want to see a decklist?" / "Want to explore the matchup?"
+
+---
+
+## Data Sources
+
+### Current: NetrunnerDB v2 API
+
+Already integrated (card_data.py + review_index.py). Provides cards, decklists, community reviews, MWL/ban data.
+
+### New: AlwaysBeRunning.net (ABR) API
+
+Public JSON API, no auth. Verified live and returning data.
+
+**Why ABR matters:** NRDB tells you what cards exist and what decks people build. ABR tells you **what wins** — which decks placed at tournaments, how many players showed up, what the winner played. This is the difference between "this deck is popular" and "this deck is competitive."
+
+| Endpoint | Data | Meta Value |
+|----------|------|------------|
+| `GET /api/tournaments?concluded=1` | All concluded events: format, cardpool, MWL, player count, winner identity codes | Tournament landscape over time |
+| `GET /api/entries?id={id}` | Per-tournament standings: rank, player, runner/corp identity+faction, **NRDB decklist URLs** | Performance data per deck, links to full deck lists |
+
+**ABR response shape (verified):**
+
+Tournament:
+```json
+{"id": 5431, "title": "Standard AMT - March 29th (EMEA)", "format": "standard",
+ "cardpool": "Vantage Point", "mwl": "Standard Ban List 26.03",
+ "players_count": 21, "winner_runner_identity": "34066",
+ "winner_corp_identity": "35069", "matchdata": true}
+```
+
+Entry (standing):
+```json
+{"user_name": "34Witches", "rank_swiss": 1, "rank_top": 1,
+ "runner_deck_title": "Sebaasy (4-0, 1st at March EMEA AMT)",
+ "runner_deck_identity_id": "34066", "runner_deck_identity_title": "Sebastião Souza Pessoa",
+ "runner_deck_url": "https://netrunnerdb.com/en/decklist/95178",
+ "corp_deck_identity_id": "35069", "corp_deck_identity_title": "The Zwicky Group",
+ "corp_deck_url": "https://netrunnerdb.com/en/decklist/95177"}
+```
+
+**Key bridge:** ABR entries include `runner_deck_url` / `corp_deck_url` that link to NRDB decklists. This connects tournament performance to full deck composition — the agent can say "this deck won 3 tournaments" and then walk through the actual card list.
+
+### Future: YouTube / Podcast Meta Commentary
+
+Channels: Metropole Grid, Neon Static, Aksu, Dullbulb. These provide qualitative meta analysis — format predictions, card evaluations, matchup discussions. Integration deferred — requires solving the video/audio → text extraction problem. Will revisit when thinking about how the agent keeps up with evolving meta over time.
 
 ---
 
@@ -252,9 +298,99 @@ The gate check criteria still apply. If anything, coaching mode raises the bar: 
 
 ---
 
-## Next Steps
+## Four-Round Design Critique
 
-1. Design the intent classifier and response generators
-2. Decide on conversation state data model
-3. Implement alongside existing quiz mode (not replacing it)
-4. Add to Track A Phase 2/3 implementation
+### Round 1: Engineer
+
+**The good:** Data retrieval pipeline is the right focus. Separating intent classification from response generation gives clean module boundaries. Reusing SM-2 for topic surfacing instead of quiz scheduling is a clever repurposing — the algorithm is sound for "what's overdue" regardless of whether the interaction is a quiz or a conversation. Option D is the right starting architecture.
+
+**Concerns:**
+
+1. **Intent classification scope is underspecified.** The doc lists 7 intent categories but doesn't define how free-text maps to them. "What beats PD?" requires matching "PD" to an identity, "beats" to a matchup query, and composing from both the concept catalog and card data. Keyword matching alone won't parse compound queries — you need at least pattern matching with entity extraction (card names, archetype names, identity names).
+
+2. **Conversation state model is too vague.** "Track current topic and depth" doesn't specify the data structure. If the user asks about glacier, then Border Control, then "what deck uses this?" — are those three separate topics or one topic at increasing depth? The state model needs to distinguish between topic threads and tangent threads so proactive suggestions are coherent.
+
+3. **Template authoring cost is hidden.** Option D says "rich templates" but the proposed interaction example has ~200 words of coherent, grounded meta-analysis. Writing that for every concept × intent combination is a content creation project, not an engineering project. With 17 concepts × ~7 intents = 119 response templates. That's a lot of manual writing.
+
+4. **ABR data is powerful but adds ingestion complexity.** The tournament endpoint returns identity codes, not deck compositions. You need to follow `deck_url` links to NRDB to get actual card lists. That's a two-hop data pipeline (ABR → NRDB decklist) that needs caching, error handling, and rate limiting. The entries endpoint also returns variable data — some players don't link decks.
+
+**Proposed solutions:**
+
+- (1) Define a lightweight entity extraction layer: maintain lookup tables for card names, identity names, and archetype aliases. Pattern-match user input against these before intent classification.
+- (2) Specify conversation state as a stack-based model: `[{concept: "glacier", depth: "intermediate", entered_via: "user_question"}, {concept: "border-control", depth: "surface", entered_via: "tangent"}]`. Pop when user redirects.
+- (3) Don't write 119 templates. Instead, write **response composers** — functions that assemble responses from data fragments. A "concept explorer" composer pulls concept description + key cards + related reviews + tournament stats and assembles them. The data *is* the content.
+- (4) ABR ingestion should be a separate module (`tournament_data.py`) with its own fetch/cache cycle, independent of card_data.py. Cache tournament results + entries as JSON, similar to how reviews are cached.
+
+### Round 2: Devil's Advocate
+
+**The pivot itself might be the problem.** The quiz agent was *supposed* to become agentic through Track A (memory, planning, initiative). That work isn't done yet — we're in Phase 2/3. Now we're redesigning the interaction model *before proving the agent behaviors work*. This is scope creep dressed as a pivot.
+
+**Specific challenges:**
+
+1. **"Conversational" without an LLM is a contradiction.** The proposed interaction shows fluid, natural dialogue. Templates can't produce that — they produce recognisably templated output. The user will quickly learn the patterns and it'll feel like navigating a phone tree, not talking to a mentor. The doc acknowledges this ("responses less natural than LLM") but underestimates how much it matters for a "coaching" experience.
+
+2. **The template approach has a content ceiling.** The agent can only teach what's been explicitly authored into templates. A quiz agent can generate infinite questions from a concept catalog + card DB. A template-based coach is bounded by the templates. When the user asks something outside the authored paths, the agent has nothing to say.
+
+3. **Topic depth tracking is easy to specify, hard to validate.** How does the agent know a user went from "surface" to "intermediate" on glacier? By counting exchanges? By keyword analysis? This is actually a harder problem than SM-2 grading because there's no explicit signal.
+
+4. **ABR data staleness.** Tournament results are a snapshot. If data was fetched 2 months ago, the "current meta" responses are outdated. The design doesn't address refresh cadence.
+
+**The honest question:** Are you building a conversational agent, or are you building an interactive Netrunner encyclopedia? Those are different products with different architectures.
+
+**Concession:** The *direction* is right — coaching is more valuable than quizzing for meta learning. But Option D (pure templates) won't deliver the experience shown in the interaction example. Either accept more rigid interactions, or plan for LLM integration sooner than "later."
+
+### Round 3: Product / UX
+
+**The interaction model is promising but the command interface undermines it.** Having `explore`, `card`, `deck`, `matchup`, `meta` as separate commands creates a tool interface, not a coaching interface. A real mentor doesn't need you to prefix your question with a command — they understand what you're asking.
+
+**UX issues:**
+
+1. **Command-first vs conversation-first.** The proposed commands (explore, card, deck, matchup) are a power-user interface. A new user's first instinct is to type "what's a good corp deck?" not "explore glacier." The free-text handler needs to be the *primary* path, with commands as shortcuts.
+
+2. **Session pacing is undefined.** How long is a session? When does the agent suggest wrapping up? The quiz agent had a natural rhythm (question → answer → grade → next). Coaching doesn't have that structure. Without pacing, sessions either end awkwardly or drag.
+
+3. **No discovery affordance.** A new user faces "what do I even ask?" The agent needs to proactively offer topics, not wait. The cold start should be: "Here are the 4 main corp archetypes in Standard right now. Which one interests you?" — not "Type 'help' for commands."
+
+4. **Depth transitions need signalling.** When the agent goes deeper on a topic, the user should know it. "Let me dig into this..." or "At a deeper level..." helps the user track where they are in the learning journey.
+
+5. **ABR tournament data makes a great entry point.** "Yesterday's EMEA AMT was won by Sebastião / Zwicky Group. Want to explore what those decks do?" — this is timely, specific, and naturally leads to archetype exploration. The agent should be able to open with real, recent results.
+
+### Round 4: Decision Advisor
+
+All three rounds raise valid points. Here's how they reconcile:
+
+**The Engineer is right** that response composers (not static templates) are the answer to the template scaling problem. Functions that assemble data fragments into coherent responses are both maintainable and produce varied output. This also addresses the Devil's Advocate's "content ceiling" concern — the ceiling is the data, not the templates.
+
+**The Devil's Advocate is right** that pure templates won't deliver the proposed interaction quality — but wrong that this means we need an LLM immediately. Response composers with good data produce surprisingly readable output when the data is inherently interesting (which card game meta data is). The interaction example is aspirational; the MVP can be more structured and still be valuable.
+
+**The Product person is right** that commands are a crutch. The interaction should be conversation-first with commands as shortcuts. This means the intent classifier is actually the most important component, not the response generators.
+
+**Concrete resolutions:**
+
+1. **Architecture stays at Option D** but with response composers, not static templates. Accept that early output will be more structured/formatted than the aspirational interaction example. Natural language polish is a later concern.
+
+2. **Intent classifier is priority #1 of implementation.** Before any response generators, build the entity extraction + intent classification layer. If this works well, the coaching experience follows. If it doesn't, the whole thing breaks.
+
+3. **Conversation state: use a simple model.** Current concept + exploration depth (surface/intermediate/deep) + list of concepts touched this session. Don't over-engineer — a stack model sounds elegant but adds complexity that isn't needed for a single-user CLI.
+
+4. **ABR tournament data is a first-class data source.** Add `tournament_data.py` for fetching and caching, with `data/tournaments.json` alongside `data/reviews.json`. ABR entries with NRDB deck URLs become the agent's "what's winning" knowledge. Refresh cadence: manual for now (same as reviews), with a note that automated refresh is a future concern alongside YouTube/podcast integration.
+
+5. **Accept the LLM question is deferred, not answered.** Design response composers with a clean `(intent, entities, data) → response_text` interface so an LLM can slot in later as an alternative response generator. Don't optimise for LLM-free forever — just don't block on LLM availability now.
+
+6. **Session pacing:** Define a session as "until the user quits" but add a soft prompt after 15+ minutes or 10+ exchanges: "Good session — we've covered X. Want to keep going or save this for next time?" This mirrors the quiz agent's natural ending without imposing a rigid structure.
+
+7. **Cold start should use real data.** If ABR tournament data is cached, open with "The recent [tournament name] was won with [identity]. Want to explore that archetype?" If no tournament data, fall back to "Here are the main archetypes — which interests you?"
+
+---
+
+## Revised Next Steps
+
+Based on the critique, implementation order is:
+
+1. **ABR tournament data module** (`tournament_data.py`) — fetch + cache tournaments and entries, resolve deck URLs to NRDB decklists. This is the "current meta" backbone.
+2. **Entity extraction layer** — lookup tables for card names, identity names, archetype aliases. Fuzzy matching.
+3. **Intent classifier** — free-text → (intent, entities) mapping. The most critical new component.
+4. **Response composers** — data-driven functions for each intent type (explore, card, deck, matchup, meta overview, quiz).
+5. **Conversation state** — simple model: current concept, depth, session history.
+6. **Integrate into agent** — new `handle_message()` that routes through intent classifier → data retrieval → response composer.
+7. **Keep quiz as embedded mode** — accessible via "quiz me" intent or explicit command.
