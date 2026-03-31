@@ -215,7 +215,177 @@ The concept catalog (#3a) is now the very first thing to build — it defines th
 
 ## Wednesday: Decomposition & Metrics
 
-*(To be completed)*
+Audited the meta-runner-2 codebase (1,567 LOC, 93 tests) against the Track A session plan. Significant progress: the repo setup session (March 28) pre-built much of the scaffolding. The decomposition below identifies what's **done**, what's **partially done**, and what's **missing** — with SMART metrics for each component.
+
+### What Already Exists (Baseline)
+
+| Component | Status | LOC | Tests |
+|-----------|--------|-----|-------|
+| SM-2 algorithm (`sm2_update`) | ✅ Complete | ~30 | 9 tests |
+| Concept memory persistence | ✅ Complete | ~50 | 2 tests |
+| Concept selection priority (`select_next_concepts`) | ✅ Complete | ~40 | 4 tests |
+| Meta concepts catalog (17 concepts, 4 categories) | ⚠️ Partial — `key_cards` empty | ~200 | 3 tests |
+| Session planning (`start_session`) | ⚠️ Partial — generic, no history reference | ~30 | 4 tests |
+| Meta commentary (`_get_meta_commentary`) | ⚠️ Partial — low quality, no reviews data | ~15 | 0 tests |
+| Course correction (`_check_course_correction`) | ⚠️ Partial — only 2 triggers | ~10 | 4 tests |
+| Review index (search/load) | ✅ Complete | ~80 | 8 tests |
+| NRDB reviews fetching | ❌ Missing — no `fetch_reviews()` | 0 | 0 tests |
+| Web UI (Gradio) | ✅ Complete (PR #1) | ~470 | 10 tests |
+
+**Assessment:** The infrastructure is built. What's missing is the **quality layer** — the parts that make this an *agent* rather than a quiz tool with an SM-2 scheduler. The gaps are all in the "intelligence" functions: commentary quality, plan personalization, course correction depth, and actual meta data to operate on.
+
+---
+
+### Component Decomposition
+
+#### Session 1: Memory
+
+**C1.1 — NRDB Reviews Ingestion**
+- **Status:** Missing. `review_index.py` has `load_reviews()` and `search_reviews()` but no API fetch function. Without reviews, the agent has zero meta knowledge to draw from.
+- **Work:** Add `fetch_reviews()` to `card_data.py` or `review_index.py`. Pull from NRDB API `/api/2.0/public/reviews`. Cache as `data/reviews.json`. Add to `.gitignore`.
+- **Barrier addressed:** #3b
+- **SMART metric:** `fetch_reviews()` pulls ≥100 reviews from NRDB API; `search_reviews()` returns relevant results for 5 test queries (`"glacier"`, `"kill deck"`, `"ice cost"`, `"asset spam"`, `"econ denial"`); reviews.json is created and gitignored.
+- **Effort:** Small — single API call, JSON dump, one function.
+
+**C1.2 — Key Cards Mapping**
+- **Status:** All 17 concepts have `"key_cards": []`. The agent can't connect concepts to actual cards.
+- **Work:** Populate `key_cards` for each concept. Two approaches: (a) manual curation from game knowledge, or (b) heuristic from card DB (match faction + keywords + type patterns). Manual is more accurate; heuristic scales but needs validation.
+- **Barrier addressed:** #3a (partial)
+- **SMART metric:** ≥15 of 17 concepts have ≥3 key cards; mapped card codes exist in the card DB; at least 2 concepts per category have cards.
+- **Effort:** Medium — requires Netrunner domain knowledge or card DB analysis.
+
+**C1.3 — Memory Persistence Lifecycle**
+- **Status:** `save_concept_memory()` is called after every grade submission and at session end. No `atexit` handler. Ctrl+C during a session loses the current session's data.
+- **Work:** Add `atexit.register(save_concept_memory)` in `__init__`. Verify data survives abnormal exits.
+- **Barrier addressed:** #1
+- **SMART metric:** `concept_memory.json` persists after: (a) normal quit, (b) Ctrl+C mid-question, (c) 3 consecutive sessions. Data is recoverable in all 3 scenarios.
+- **Effort:** Small — 3 lines of code + test.
+
+**C1.4 — Concept Memory Cross-Session Validation**
+- **Status:** SM-2 unit tests exist but no integration test verifying multi-session learning.
+- **Work:** Add a test that simulates: session 1 (answer 4 concepts) → save → session 2 (verify overdue/weak concepts are prioritized) → save → session 3 (verify learning curve changes concept selection).
+- **Barrier addressed:** #8 (test coverage for new behavior)
+- **SMART metric:** Integration test passes: session 2 plan differs from session 1 based on grades given; session 3 correctly identifies overdue concepts from session 1.
+- **Effort:** Medium — requires test fixture design.
+
+#### Session 2: Planning
+
+**C2.1 — Cold Start Plan**
+- **Status:** First session shows "🆕 new concept" for all concepts, picks first 4 in untested order (essentially catalog order). No explanation of what the agent does or why.
+- **Work:** Add a first-session path in `start_session()` that explains the learning system and picks foundational concepts (archetypes first: glacier, rush, kill, fast-advance — not matchups or meta-knowledge which depend on understanding archetypes).
+- **Barrier addressed:** #5
+- **SMART metric:** First-ever session opening: (a) explains the learning model in ≤3 sentences, (b) selects ≥3 archetype concepts (not matchups or meta-knowledge), (c) differs visually from returning-user plan.
+- **Effort:** Small — conditional logic + copy.
+
+**C2.2 — Historical Session Summary in Plan**
+- **Status:** `start_session()` shows concept priorities but no reference to past sessions. The `memory["sessions"]` array tracks history but isn't surfaced.
+- **Work:** Add "Last session (March 28): explored 4 concepts at 62% accuracy. Weak areas: glacier-matchups, kill-deck-counterplay" to the opening message when session history exists.
+- **Barrier addressed:** #4 (partial — session boundary exists, but plan doesn't use history)
+- **SMART metric:** When ≥1 past session exists, opening message includes: (a) date of last session, (b) number of concepts explored, (c) accuracy %, (d) specific weak areas if any. When 0 past sessions, falls back to cold start (C2.1).
+- **Effort:** Small — read `memory["sessions"][-1]`, format string.
+
+**C2.3 — Plan Adaptation Over Time**
+- **Status:** `select_next_concepts()` priority ordering works (overdue → untested → weak → reinforcement) but hasn't been validated with realistic multi-session data.
+- **Work:** Simulate 5-session learning arcs with different grade patterns. Verify plans evolve: session 1 = all new → session 2 = mix of overdue + new → session 3 = weak areas dominate → session 4 = reinforcement of strong + overdue from session 1.
+- **Barrier addressed:** Overall quality assurance
+- **SMART metric:** 5-session simulation test: each session's plan differs from previous; by session 5, ≥2 concepts that were graded "easy" in session 1 reappear for reinforcement review.
+- **Effort:** Medium — requires test design with controlled dates.
+
+#### Session 3: Initiative
+
+**C3.1 — Meta Commentary Quality**
+- **Status:** `_get_meta_commentary()` searches reviews by concept name, takes first 200 chars of first match. Problems: (a) concept names like "Glacier" may match irrelevant reviews, (b) first 200 chars often include HTML artifacts or preamble, (c) no fallback if no reviews exist yet.
+- **Work:** Improve search to use concept description keywords + key card names. Extract meaningful sentences (not arbitrary 200 chars). Add fallback to concept description when no reviews match.
+- **Barrier addressed:** #7a
+- **SMART metric:** Manual evaluation on 10 concepts: ≥6/10 produce commentary that a Netrunner player would find relevant (not generic or garbled). Fallback produces something useful for all 10.
+- **Effort:** Medium — search refinement + text extraction logic.
+
+**C3.2 — Course Correction Depth**
+- **Status:** Two triggers: 3 wrong in a row → "shift to something easier"; 3 easy in a row → "push harder". No concept-specific insight.
+- **Work:** Add: (a) same-concept repeated wrong → "Let's approach [concept] from a different angle"; (b) cross-concept pattern → "You're strong on archetypes but struggling with matchups — that's normal, matchups build on archetype knowledge"; (c) session fatigue → after 10+ questions, "Good session — you've covered a lot. Want to wrap up?"
+- **Barrier addressed:** #7
+- **SMART metric:** Course correction triggers in ≥4 distinct scenarios (current 2 + at least 2 new). Each trigger produces a message that references specific concepts or categories (not generic).
+- **Effort:** Medium — pattern detection + message templates.
+
+**C3.3 — Post-Answer Explanation Quality**
+- **Status:** Wrong answers show concept description. Correct answers show "Strong understanding!" No meta reasoning ("why this matters").
+- **Work:** On wrong: show description + one relevant review excerpt. On correct: connect to broader strategy ("This is key for glacier matchups because..."). Use reviews and concept relationships for grounding.
+- **Barrier addressed:** #6 (response builder)
+- **SMART metric:** Post-answer responses for wrong grades include ≥1 sentence beyond the concept description for 5/5 tested concepts. Post-correct responses for grade=4 include a connecting insight (not just "✅ Strong understanding!").
+- **Effort:** Medium — requires review integration + concept relationship logic.
+
+#### Cross-Cutting
+
+**CC.1 — Behavioral Integration Test**
+- **Status:** 93 tests exist but all are unit-level. No test validates the agent behavior sequence (start → quiz → grade → commentary → next concept → course correction → quit → restart).
+- **Work:** Add an integration test that scripts a full session lifecycle. Verify all three behaviors (memory, planning, initiative) fire in sequence.
+- **Barrier addressed:** #8
+- **SMART metric:** Integration test covers: start_session with history → quiz → grade → verify commentary appears → grade 3 more → verify course correction fires → quit → restart → verify plan references last session.
+- **Effort:** Medium.
+
+**CC.2 — Gate Check Test**
+- **Status:** Gate check defined ("≥3 unprompted meta-grounded observations per session") but no automated way to validate it.
+- **Work:** Define a scripted 3-session play-through scenario. Count unprompted agent actions (commentary, course correction, plan adaptation). Log counts. The gate check is manual evaluation but the counting should be automated.
+- **SMART metric:** Scripted 3-session play-through produces ≥3 unprompted agent messages per session that reference specific meta concepts. If <3, Track A fails the gate check.
+- **Effort:** Large — requires scripted scenario design + evaluation criteria.
+
+---
+
+### Dependency Graph
+
+```
+C1.1 (fetch reviews) ──┬──→ C3.1 (commentary quality)
+                        └──→ C3.3 (post-answer explanations)
+C1.2 (key cards) ───────┬──→ C3.1 (commentary quality — search by card name)
+                        └──→ C3.3 (connect answers to specific cards)
+C1.3 (persistence) ────────→ C1.4 (cross-session validation)
+C2.1 (cold start) ─────────→ C2.2 (history summary — needs cold start as fallback)
+C1.4 (cross-session) ──────→ C2.3 (plan adaptation — needs multi-session data)
+C3.1 + C3.2 + C3.3 ────────→ CC.1 (behavioral integration test)
+CC.1 ───────────────────────→ CC.2 (gate check)
+```
+
+### Parallel Tracks
+
+These can be worked in parallel:
+
+| Track | Components | Dependency |
+|-------|-----------|------------|
+| **Data** | C1.1 (reviews fetch) + C1.2 (key cards) | None — independent of each other |
+| **Memory lifecycle** | C1.3 (atexit) + C1.4 (cross-session test) | C1.3 before C1.4 |
+| **Planning** | C2.1 (cold start) + C2.2 (history summary) | C2.1 before C2.2 |
+| **Initiative** | C3.1 + C3.2 + C3.3 | Depends on Data track completing first |
+| **Validation** | CC.1 + CC.2 | Depends on everything above |
+
+### Recommended Build Order
+
+| Phase | Components | What It Proves |
+|-------|-----------|---------------|
+| **Phase 1** | C1.1, C1.2, C1.3, C2.1 | Agent has data to operate on + foundational behaviors |
+| **Phase 2** | C2.2, C2.3, C1.4 | Planning is personalized and adapts across sessions |
+| **Phase 3** | C3.1, C3.2, C3.3 | Agent produces unprompted, relevant meta insight |
+| **Phase 4** | CC.1, CC.2 | Gate check: does this feel like an agent? |
+
+### Evaluation Strategy
+
+**Automated (unit + integration tests):**
+- SM-2 correctness: ✅ already covered (9 tests)
+- Concept selection: ✅ already covered (4 tests)
+- Memory persistence: needs C1.3 + C1.4 tests
+- Plan adaptation: needs C2.3 simulation tests
+- Course correction triggers: needs C3.2 tests
+- Full behavioral sequence: needs CC.1
+
+**Manual (play-through evaluation):**
+- Commentary relevance (C3.1): 10-concept manual review
+- Plan quality (C2.1, C2.2): first-session vs returning-session comparison
+- Gate check (CC.2): 3-session scripted play-through, count unprompted actions
+
+**Quantitative targets:**
+- ≥3 unprompted meta-grounded observations per session (gate check)
+- ≥60% commentary relevance on manual evaluation
+- 5-session plan evolution is monotonically improving (weak areas diminish)
+- Test coverage: current 93 → target ≥110 after all components
 
 ---
 
@@ -248,3 +418,7 @@ The concept catalog (#3a) is now the very first thing to build — it defines th
 1. **Knowledge graph feasibility study** — Researched NetrunnerDB API (v2 + v3 preview) and ABR API. Designed a full graph schema (14 node types, 15+ edge types) for representing cards, decks, reviews, tournaments, archetypes, synergies, and temporal meta shifts. Recommended Kuzu (embedded) → Neo4j (production RAG). Assessed as clearly feasible but categorized as Track B / Cycle 3 infrastructure. See `journal/2026-03-28.md`.
 
 2. **Revised Track A: unit of learning shift** — Identified that SM-2 over card facts (trivia recall) ≠ meta understanding. "Meta" in card games means the metagame — archetypes, matchups, counter-strategies, meta shifts. Revised Track A to operate on **meta concepts** instead of card facts. SM-2 stays as the scheduling engine but schedules concepts like "glacier-matchups" and "kill-deck-counterplay" instead of "01042_cost_quiz." Added NRDB reviews as lightweight meta knowledge source (single API call). Updated barriers: new #3a (meta concepts catalog) and #7a (meta context from reviews). Critical path now starts with defining the concept space. Updated session plan, framing, and gate check accordingly.
+
+### Week 4
+
+**2026-03-30 (Sunday):** Completed Wednesday decomposition phase. Audited meta-runner-2 codebase (1,567 LOC, 93 tests) against barriers. Key finding: infrastructure is built but the quality layer is missing — commentary grabs arbitrary text, planning ignores session history, key_cards is empty, reviews data doesn't exist yet. Decomposed Track A into 13 components across 4 phases with SMART metrics. Identified that Phase 1 (data + foundational behaviors) is entirely independent work that can be parallelized. See decomposition tables above for full detail.
